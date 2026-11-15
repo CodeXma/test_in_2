@@ -1,6 +1,6 @@
 # GLaDOS 自动签到助手 (GLaDOS Checkin Helper)
 
-![Version](https://img.shields.io/badge/version-1.5.1-blue.svg)
+![Version](https://img.shields.io/badge/version-1.5.2-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Chrome-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/bebkcollfclnaamapnjcaggfkgdfkail.svg)](https://chromewebstore.google.com/detail/bebkcollfclnaamapnjcaggfkgdfkail)
@@ -20,6 +20,11 @@
 - **本地历史记录**：本地保存最近 30 条签到执行日志，手动或自动状态一目了然。
 - **通知提醒**：支持可选的系统级别桌面通知，即时反馈签到结果与获得点数。
 - **隐私安全**：纯本地运行，不收集任何用户账号数据。
+
+## 🆕 v1.5.2 更新日志
+
+- 签到页出现「请验证您是真人」时，扩展会在前台打开签到页，先点击该勾选框，再点击签到按钮。
+- 点击期间 Chrome 会短暂显示“扩展正在调试此浏览器”，点击结束后立即断开。
 
 ## 🆕 v1.5.1 更新日志
 

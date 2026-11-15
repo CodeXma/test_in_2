@@ -1,7 +1,7 @@
 # 隐私政策 (Privacy Policy)
 
 **生效日期：2026年1月14日**
-**更新日期：2026年11月13日**
+**更新日期：2026年11月15日**
 
 欢迎使用 **GLaDOS 自动签到助手** (GLaDOS Checkin Helper)。我们非常重视您的隐私。本政策旨在说明本扩展程序如何处理数据。
 
@@ -26,7 +26,8 @@
 * `notifications`: 用于在签到任务完成后向您发送系统反馈。
 * `host_permissions`: 仅用于访问 GLaDOS 官方页面进行签到操作与积分同步。
 * `declarativeNetRequest`：用于在请求中安全地维护 Origin 和 Referer 头部，确保符合官方服务器的安全校验逻辑。
-* `scripting`：仅用于在签到触发时，在官方签到页面 (`https://glados.cloud/console/checkin`) 内模拟点击原生签到按钮并读取签到反馈结果，任务完成后立即释放。
+* `scripting`：仅用于在签到触发时，在官方签到页面 (`https://glados.cloud/console/checkin`) 内定位真人验证框和签到按钮，并读取签到反馈结果。
+* `debugger`：仅在点击「请验证您是真人」和签到按钮的那几秒内附到当前签到标签页，用来发送一次真实鼠标点击，点击后立即断开。不读取页面之外的数据。
 
 ## 5. 联系方式
 如果您对本隐私政策有任何疑问，可以通过 GitHub 提交 Issue 与我联系。

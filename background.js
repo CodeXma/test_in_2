@@ -169,19 +169,104 @@ async function tryCheckIn() {
   }
 }
 
+function readCheckinPage() {
+  if (window.location.pathname.includes("login") || window.location.pathname.includes("authenticate")) {
+    return { notLoggedIn: true };
+  }
+
+  const frames = [];
+  function walk(root) {
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll("iframe").forEach((frame) => frames.push(frame));
+    root.querySelectorAll("*").forEach((el) => {
+      if (el.shadowRoot) walk(el.shadowRoot);
+    });
+  }
+  walk(document);
+
+  let turnstile = null;
+  for (const frame of frames) {
+    const blob = `${frame.src || ""} ${frame.title || ""}`.toLowerCase();
+    const rect = frame.getBoundingClientRect();
+    const matched = blob.includes("challenges.cloudflare.com") || blob.includes("turnstile") || blob.includes("cloudflare");
+    if (!matched || rect.width < 40 || rect.height < 20) continue;
+    turnstile = {
+      x: Math.round(rect.left + Math.min(28, rect.width / 5)),
+      y: Math.round(rect.top + rect.height / 2)
+    };
+    break;
+  }
+
+  const button = document.querySelector("button.ckb");
+  if (!button) return { buttonNotFound: true, turnstile };
+  const rect = button.getBoundingClientRect();
+  return {
+    turnstile,
+    button: {
+      done: button.classList.contains("is-done"),
+      disabled: button.disabled,
+      x: Math.round(rect.left + rect.width / 2),
+      y: Math.round(rect.top + rect.height / 2),
+      text: (button.innerText || "").trim()
+    },
+    result: window.__gladosCheckinResult || null
+  };
+}
+
+async function readPage(tabId) {
+  const [injected] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: readCheckinPage
+  });
+  return injected && injected.result;
+}
+
+async function trustedClick(tabId, point) {
+  if (!point) return false;
+  const target = { tabId };
+  await chrome.debugger.attach(target, "1.3");
+  try {
+    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: point.x,
+      y: point.y
+    });
+    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: point.x,
+      y: point.y,
+      button: "left",
+      clickCount: 1
+    });
+    await sleep(120);
+    await chrome.debugger.sendCommand(target, "Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: point.x,
+      y: point.y,
+      button: "left",
+      clickCount: 1
+    });
+    return true;
+  } finally {
+    try {
+      await chrome.debugger.detach(target);
+    } catch (e) {}
+  }
+}
+
 // ============================================================================
-// 【终极破局引擎】在真实官网主环境（MAIN World）中直接触发官方原生签到按钮
-// 原理：不再自己伪造 fetch 请求，而是直接点击网页上的 .ckb 签到按钮，由官网原版代码完成全部校验！
+// 在已登录的本机浏览器里打开签到页，先点 Cloudflare 真人验证，再点签到按钮。
+// debugger 只在这一次点击期间附上，点完立即断开。
 // ============================================================================
 async function executeInRealWebPage(modeText) {
   let tempTabId = null;
   try {
-    console.log(`[${modeText}] 正在后台打开官网签到页，准备触发官方原生签到按钮...`);
+    console.log(`[${modeText}] 正在打开官网签到页，准备点选真人验证并签到...`);
 
-    // 1. 创建官网签到标签页（active: false 静默打开，不抢占用户焦点）
     const tab = await chrome.tabs.create({
       url: "https://glados.cloud/console/checkin",
-      active: false
+      active: true
     });
     tempTabId = tab.id;
 
@@ -262,72 +347,78 @@ async function executeInRealWebPage(modeText) {
     console.log(`[${modeText}] 页面已就绪，正在模拟真人观察页面 ${(humanWaitMs / 1000).toFixed(1)} 秒...`);
     await sleep(humanWaitMs);
 
-    // 5. 在网页主世界中寻找官方的签到按钮（button.ckb）并直接模拟真实鼠标点击！
-    const clickResult = await chrome.scripting.executeScript({
-      target: { tabId: tempTabId },
-      world: "MAIN",
-      func: async () => {
-        const sleepInPage = (ms) => new Promise(r => setTimeout(r, ms));
+    await chrome.tabs.update(tempTabId, { active: true });
+    let page = null;
+    for (let i = 0; i < 10; i++) {
+      page = await readPage(tempTabId);
+      if (page && (page.notLoggedIn || page.button)) break;
+      await sleep(500);
+    }
+    if (!page) return null;
+    if (page.notLoggedIn) return { notLoggedIn: true };
+    if (!page.button) return { buttonNotFound: true, turnstile: page.turnstile || null };
+    if (page.button.done) {
+      return {
+        success: true,
+        data: { code: 1, message: "Checkin Repeats! Please Try Tomorrow (今日已签到)" }
+      };
+    }
 
-        // 检查是否被重定向到了登录页
-        if (window.location.pathname.includes('login') || window.location.pathname.includes('authenticate')) {
-          return { notLoggedIn: true };
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      await chrome.scripting.executeScript({
+        target: { tabId: tempTabId },
+        world: "MAIN",
+        func: () => { window.__gladosCheckinResult = null; }
+      });
+      page = await readPage(tempTabId);
+      if (page && page.turnstile) {
+        console.log(`[${modeText}] 正在点击「请验证您是真人」。`);
+        try {
+          await trustedClick(tempTabId, page.turnstile);
+        } catch (error) {
+          console.error(`[${modeText}] 点击验证框失败:`, error);
         }
+        await sleep(2500);
+      }
+      page = await readPage(tempTabId);
+      if (!page || !page.button) return { buttonNotFound: true };
+      if (page.button.done) {
+        return {
+          success: true,
+          data: { code: 1, message: page.button.text || "Checkin Repeats! Please Try Tomorrow" }
+        };
+      }
+      if (page.button.disabled) {
+        console.log(`[${modeText}] 签到按钮还不可用，等待验证完成。`);
+        await sleep(2000);
+        continue;
+      }
+      console.log(`[${modeText}] 正在点击签到按钮。`);
+      try {
+        await trustedClick(tempTabId, page.button);
+      } catch (error) {
+        console.error(`[${modeText}] 点击签到按钮失败:`, error);
+        return { success: false, error: "无法点击签到按钮，请在打开的页面手动完成。" };
+      }
 
-        // 寻找官网签到按钮（官网源码中签到按钮的 class 固定为 "ckb"）
-        let checkinBtn = document.querySelector('button.ckb');
-        // 如果页面渲染稍微慢了一点，再最多等 3 秒找一下按钮
-        for (let w = 0; w < 6 && !checkinBtn; w++) {
-          await sleepInPage(500);
-          checkinBtn = document.querySelector('button.ckb');
+      for (let i = 0; i < 20; i++) {
+        await sleep(500);
+        const current = await readPage(tempTabId);
+        if (current && current.result) {
+          const message = String(current.result.message || "").toLowerCase();
+          if (message.includes("cloudflare") && attempt === 1) break;
+          return { success: true, data: current.result };
         }
-
-        if (!checkinBtn) {
-          return { buttonNotFound: true };
-        }
-
-        // 如果按钮上已经有 "is-done" 类名，或者处于 disabled 状态，说明今天已经签过到了
-        if (checkinBtn.classList.contains('is-done') || checkinBtn.disabled) {
+        if (current && current.button && current.button.done) {
           return {
             success: true,
-            data: { code: 1, message: "Checkin Repeats! Please Try Tomorrow (今日已签到)" }
+            data: { code: 0, message: current.button.text || "CheckIn! Get Points" }
           };
         }
-
-        // 触发完整的鼠标移动、按下、抬起和点击事件链（模拟 100% 真实的物理鼠标点击）
-        const mouseEvents = ['mouseover', 'mouseenter', 'mousedown', 'mouseup', 'click'];
-        mouseEvents.forEach(eventType => {
-          const evt = new MouseEvent(eventType, {
-            bubbles: true,
-            cancelable: true,
-            view: window
-          });
-          checkinBtn.dispatchEvent(evt);
-        });
-
-        // 点击按钮后，等待官网自己的代码把请求发出去并收到结果（最多轮询等待 8 秒）
-        for (let i = 0; i < 16; i++) {
-          await sleepInPage(500);
-          if (window.__gladosCheckinResult) {
-            return { success: true, data: window.__gladosCheckinResult };
-          }
-          // 如果按钮变成了 is-done 完成状态，也可以直接读取按钮上的文字作为保底结果
-          if (checkinBtn.classList.contains('is-done')) {
-            return {
-              success: true,
-              data: { code: 0, message: checkinBtn.innerText.trim() || "CheckIn! Get Points" }
-            };
-          }
-        }
-
-        return { success: false, error: "点击签到按钮后等待服务器响应超时" };
       }
-    });
-
-    if (clickResult && clickResult[0] && clickResult[0].result) {
-      return clickResult[0].result;
     }
-    return null;
+
+    return { success: false, error: "点击签到按钮后等待服务器响应超时" };
 
   } catch (error) {
     console.error(`[${modeText}] 网页原生点击签到执行出错:`, error);
