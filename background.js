@@ -262,11 +262,11 @@ async function trustedClick(tabId, point) {
 async function executeInRealWebPage(modeText) {
   let tempTabId = null;
   try {
-    console.log(`[${modeText}] 正在打开官网签到页，准备点选真人验证并签到...`);
+    console.log(`[${modeText}] 正在后台打开官网签到页，准备点选真人验证并签到...`);
 
     const tab = await chrome.tabs.create({
       url: "https://glados.cloud/console/checkin",
-      active: true
+      active: false
     });
     tempTabId = tab.id;
 
@@ -347,7 +347,6 @@ async function executeInRealWebPage(modeText) {
     console.log(`[${modeText}] 页面已就绪，正在模拟真人观察页面 ${(humanWaitMs / 1000).toFixed(1)} 秒...`);
     await sleep(humanWaitMs);
 
-    await chrome.tabs.update(tempTabId, { active: true });
     let page = null;
     for (let i = 0; i < 10; i++) {
       page = await readPage(tempTabId);
