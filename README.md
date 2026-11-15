@@ -1,6 +1,6 @@
 # GLaDOS 自动签到助手 (GLaDOS Checkin Helper)
 
-![Version](https://img.shields.io/badge/version-1.5.1-blue.svg)
+![Version](https://img.shields.io/badge/version-1.5.2-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Chrome-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/bebkcollfclnaamapnjcaggfkgdfkail.svg)](https://chromewebstore.google.com/detail/bebkcollfclnaamapnjcaggfkgdfkail)
@@ -13,13 +13,18 @@
 
 ## ✨ 功能特点
 
-- **真实网页原生点击签到**：到达设定小时后，自动在随机的“分钟与秒数”静默打开官方签到页，模拟真人观察停留数秒后直接触发页面原生签到按钮，100% 兼容 Cloudflare 验证与官方防伪校验，稳定获取正常权重高分奖励（10~15点）。
+- **打开官方签到页再签到**：到达设定小时后，在随机时间打开官方签到页并点击页面上的签到按钮。如果出现「请验证您是真人」，签到页会切到前台，需要你亲自点一下验证框。插件不会代替你完成人机验证。
 - **智能自动补签**：基于 Chrome Alarms 机制，即使错过设定时间段才开启电脑与浏览器，也会在网络稳定后自动完成补签。
 - **30天签到日历面板**：在设置页直观展示服务器当前总积分、连续签到天数，以及最近 30 天的服务器签到日历与每日获得的点数。
 - **未登录状态检测**：当浏览器未登录官网或 Cookie 过期时，在设置页日历面板与桌面通知中提供清晰的登录引导提示。
 - **本地历史记录**：本地保存最近 30 条签到执行日志，手动或自动状态一目了然。
 - **通知提醒**：支持可选的系统级别桌面通知，即时反馈签到结果与获得点数。
 - **隐私安全**：纯本地运行，不收集任何用户账号数据。
+
+## 🆕 v1.5.2 更新日志
+
+- **人机验证交给本人完成**：签到页出现 Cloudflare「请验证您是真人」时，把页面切到前台并等待你点击验证框，通过后再点击签到。未完成时保留签到页，不再悄悄关掉。
+- **修正误记已签到**：签到按钮只是因为还没完成验证而不可用时，不再写成「今日已签到」。
 
 ## 🆕 v1.5.1 更新日志
 
@@ -46,12 +51,13 @@
 2. 左键点击图标（或右键选择 **“选项” (Options)**）打开设置页面。
 3. 在设置页面设定您期望的 **每天签到时间（0-23点）**。
 4. 确保您在当前浏览器中已登录 `https://glados.cloud/console/checkin`。
-5. 您可以点击“手动测试签到”按钮（等待 12 秒倒计时完成）来验证配置是否正确。
+5. 您可以点击“手动测试签到”按钮来验证配置是否正确。如果签到页出现人机验证，请先点击验证框。
 
 ## 📂 文件结构
 
 - `manifest.json`: 插件配置文件 (Manifest V3)。
 - `background.js`: 后台常驻脚本，负责定时闹钟、随机调度和网页原生点击签到逻辑。
+- `checkin-gate.js`: 判断签到页是否还在等人机验证，避免把未验证误记为已签到。
 - `options.html/js`: 插件设置界面、服务器 30 天签到日历及本地历史记录展示。
 - `PRIVACY_POLICY.md`: 隐私政策说明。
 - `icon.png`: 程序图标文件。

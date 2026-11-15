@@ -3,6 +3,9 @@
 // 作用：插件的后台常驻服务脚本（Service Worker），负责定时闹钟、随机时间调度和原生网页点击签到
 // ============================================================================
 
+importScripts("checkin-gate.js");
+const CheckinGate = globalThis.CheckinGate;
+
 // 【辅助工具 1】延时等待函数（模拟人类停顿思考）
 // 参数 ms：需要等待的毫秒数（1000 毫秒 = 1 秒）
 function sleep(ms) {
@@ -169,176 +172,345 @@ async function tryCheckIn() {
   }
 }
 
+// 读取签到页状态。只看官方验证组件是否已经通过，不把验证令牌带回插件。
+function inspectCheckinPage() {
+  const path = window.location.pathname || "";
+  if (path.includes("login") || path.includes("authenticate")) {
+    return { notLoggedIn: true };
+  }
+
+  const seen = new Set();
+  const tokenFields = [];
+  let hasWidgetFrame = false;
+
+  const visit = (root) => {
+    if (!root || typeof root.querySelectorAll !== "function" || seen.has(root)) return;
+    seen.add(root);
+
+    root.querySelectorAll(
+      'textarea[name="cf-turnstile-response"], input[name="cf-turnstile-response"]'
+    ).forEach((node) => {
+      tokenFields.push(node);
+    });
+
+    if (root.querySelector('iframe[src*="challenges.cloudflare.com"], .cf-turnstile, [data-sitekey]')) {
+      hasWidgetFrame = true;
+    }
+
+    root.querySelectorAll("*").forEach((el) => {
+      if (el.shadowRoot) visit(el.shadowRoot);
+    });
+  };
+
+  visit(document);
+
+  const hasToken = tokenFields.some((node) => typeof node.value === "string" && node.value.length > 0);
+  let turnstile = "absent";
+  if (hasToken) turnstile = "passed";
+  else if (hasWidgetFrame || tokenFields.length > 0) turnstile = "pending";
+
+  const checkinBtn = document.querySelector("button.ckb");
+  const label = checkinBtn ? (checkinBtn.innerText || "").replace(/\s+/g, " ").trim() : "";
+  const alreadyDone = Boolean(
+    checkinBtn && (checkinBtn.classList.contains("is-done") || /已签到|repeats/i.test(label))
+  );
+
+  return {
+    notLoggedIn: false,
+    hasButton: Boolean(checkinBtn),
+    alreadyDone,
+    buttonDisabled: Boolean(checkinBtn && checkinBtn.disabled),
+    turnstile,
+    label
+  };
+}
+
+// 旁听官网自己发出的签到响应，供结果通知使用。不改页面可见性，也不接触验证框。
+function installCheckinResponseListener() {
+  window.__gladosCheckinResult = null;
+  if (window.__gladosHooked) return;
+  window.__gladosHooked = true;
+
+  const rawOpen = XMLHttpRequest.prototype.open;
+  const rawSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+    this._requestUrl = url;
+    return rawOpen.call(this, method, url, ...rest);
+  };
+  XMLHttpRequest.prototype.send = function (...args) {
+    this.addEventListener("load", function () {
+      try {
+        if (this._requestUrl && this._requestUrl.includes("/user/checkin") && !this._requestUrl.includes("/challenge")) {
+          window.__gladosCheckinResult = JSON.parse(this.responseText);
+        }
+      } catch (e) {}
+    });
+    return rawSend.apply(this, args);
+  };
+
+  const rawFetch = window.fetch;
+  window.fetch = async function (...args) {
+    const response = await rawFetch.apply(this, args);
+    try {
+      const reqUrl = typeof args[0] === "string" ? args[0] : (args[0] && args[0].url) || "";
+      if (reqUrl.includes("/user/checkin") && !reqUrl.includes("/challenge")) {
+        const clone = response.clone();
+        clone.json().then((data) => {
+          window.__gladosCheckinResult = data;
+        }).catch(() => {});
+      }
+    } catch (e) {}
+    return response;
+  };
+}
+
+// 点击官网签到按钮。按钮因还没验证而不可用时，不能当成“今天已经签过”。
+async function clickOfficialCheckinButton() {
+  const sleepInPage = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  window.__gladosCheckinResult = null;
+
+  const path = window.location.pathname || "";
+  if (path.includes("login") || path.includes("authenticate")) {
+    return { notLoggedIn: true };
+  }
+
+  let checkinBtn = document.querySelector("button.ckb");
+  for (let i = 0; i < 6 && !checkinBtn; i++) {
+    await sleepInPage(500);
+    checkinBtn = document.querySelector("button.ckb");
+  }
+  if (!checkinBtn) return { buttonNotFound: true };
+
+  const label = (checkinBtn.innerText || "").replace(/\s+/g, " ").trim();
+  if (checkinBtn.classList.contains("is-done") || /已签到|repeats/i.test(label)) {
+    return {
+      success: true,
+      data: { code: 1, message: label || "Checkin Repeats! Please Try Tomorrow (今日已签到)" }
+    };
+  }
+
+  if (checkinBtn.disabled) {
+    return { success: false, error: "签到按钮仍不可用，请先完成「请验证您是真人」" };
+  }
+
+  checkinBtn.click();
+
+  for (let i = 0; i < 16; i++) {
+    await sleepInPage(500);
+    if (window.__gladosCheckinResult) {
+      return { success: true, data: window.__gladosCheckinResult };
+    }
+    if (checkinBtn.classList.contains("is-done")) {
+      return {
+        success: true,
+        data: { code: 0, message: (checkinBtn.innerText || "").trim() || "CheckIn! Get Points" }
+      };
+    }
+  }
+
+  return { success: false, error: "点击签到按钮后等待服务器响应超时" };
+}
+
+async function readPageState(tabId) {
+  try {
+    await chrome.tabs.get(tabId);
+  } catch (error) {
+    return { tabClosed: true };
+  }
+
+  try {
+    const injected = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: inspectCheckinPage
+    });
+    return injected && injected[0] ? injected[0].result : null;
+  } catch (error) {
+    console.warn("读取签到页状态失败:", error);
+    return null;
+  }
+}
+
+async function revealCheckinTab(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.tabs.update(tabId, { active: true });
+    if (tab.windowId !== undefined && chrome.windows) {
+      await chrome.windows.update(tab.windowId, { focused: true });
+    }
+  } catch (error) {
+    console.warn("无法将签到页切到前台:", error);
+  }
+}
+
+function notifyNeedsHuman() {
+  try {
+    const created = chrome.notifications.create("glados-human-check", {
+      type: "basic",
+      iconUrl: "icon.png",
+      title: "请完成人机验证",
+      message: "签到页已打开。请点击「请验证您是真人」，完成后会继续签到。"
+    });
+    if (created && typeof created.catch === "function") created.catch(() => {});
+  } catch (error) {
+    console.warn("无法发出人机验证通知:", error);
+  }
+}
+
+const HUMAN_VERIFY_WAIT_MS = 90000;
+
+async function waitForUserVerification(tabId, modeText) {
+  console.log(`[${modeText}] 签到页需要人机验证，已切到前台，等待你点击「请验证您是真人」...`);
+  await revealCheckinTab(tabId);
+  notifyNeedsHuman();
+
+  const deadline = Date.now() + HUMAN_VERIFY_WAIT_MS;
+  while (Date.now() < deadline) {
+    await sleep(1000);
+    const state = await readPageState(tabId);
+    const status = CheckinGate.humanWaitStatus(state);
+    if (status === "ready") return { ready: true };
+    if (status === "done") {
+      return {
+        exit: {
+          success: true,
+          data: {
+            code: 1,
+            message: (state && state.label) || "Checkin Repeats! Please Try Tomorrow (今日已签到)"
+          }
+        }
+      };
+    }
+    if (status === "login") return { exit: { notLoggedIn: true } };
+    if (status === "closed") return { exit: { success: false, error: "签到页已关闭，人机验证未完成" } };
+  }
+
+  return {
+    exit: {
+      success: false,
+      error: "人机验证未完成。请在打开的签到页点击「请验证您是真人」，再点「签到」。签到页已保留。"
+    }
+  };
+}
+
+async function waitForInitialState(tabId) {
+  let last = null;
+  for (let i = 0; i < 16; i++) {
+    last = await readPageState(tabId);
+    if (!last || last.tabClosed || last.notLoggedIn || last.alreadyDone) return last;
+    if (last.turnstile === "pending" || last.turnstile === "passed") return last;
+    if (last.hasButton && i >= 8) return last;
+    await sleep(500);
+  }
+  return last;
+}
+
+async function runInPage(tabId, func) {
+  const injected = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func
+  });
+  return injected && injected[0] ? injected[0].result : null;
+}
+
+async function clickWhenEnabled(tabId) {
+  for (let i = 0; i < 10; i++) {
+    const state = await readPageState(tabId);
+    if (state && state.tabClosed) return { success: false, error: "签到页已关闭" };
+    if (state && state.notLoggedIn) return { notLoggedIn: true };
+    if (state && state.alreadyDone) {
+      return {
+        success: true,
+        data: { code: 1, message: state.label || "Checkin Repeats! Please Try Tomorrow (今日已签到)" }
+      };
+    }
+    if (!state || !state.hasButton || state.buttonDisabled) {
+      await sleep(300);
+      continue;
+    }
+    return runInPage(tabId, clickOfficialCheckinButton);
+  }
+  return { success: false, error: "签到按钮仍不可用。请先完成「请验证您是真人」，再点击页面上的「签到」。" };
+}
+
 // ============================================================================
-// 【终极破局引擎】在真实官网主环境（MAIN World）中直接触发官方原生签到按钮
-// 原理：不再自己伪造 fetch 请求，而是直接点击网页上的 .ckb 签到按钮，由官网原版代码完成全部校验！
+// 在官网签到页点击原生签到按钮。
+// 出现「请验证您是真人」时，把页面交给用户本人点击，通过后再点签到。
 // ============================================================================
 async function executeInRealWebPage(modeText) {
   let tempTabId = null;
+  let closeTabOnFinish = false;
   try {
-    console.log(`[${modeText}] 正在后台打开官网签到页，准备触发官方原生签到按钮...`);
+    console.log(`[${modeText}] 正在打开官网签到页...`);
 
-    // 1. 创建官网签到标签页（active: false 静默打开，不抢占用户焦点）
     const tab = await chrome.tabs.create({
       url: "https://glados.cloud/console/checkin",
       active: false
     });
     tempTabId = tab.id;
 
-    // 2. 轮询等待页面彻底加载完成（监听 tab status 变为 complete，最多等 10 秒）
     for (let i = 0; i < 20; i++) {
       await sleep(500);
       try {
         const currentTab = await chrome.tabs.get(tempTabId);
-        if (currentTab && currentTab.status === "complete") {
-          break;
-        }
+        if (currentTab && currentTab.status === "complete") break;
       } catch (e) {
         break;
       }
     }
 
-    // 3. 页面加载完成后，先注入一段“可见性伪装与结果旁听器”到网页主世界 (world: "MAIN")
-    // 作用：① 欺骗 Cloudflare 说当前标签页处于激活可见状态；② 旁听官网原版代码发出的 /api/user/checkin 响应
-    await chrome.scripting.executeScript({
-      target: { tabId: tempTabId },
-      world: "MAIN", // 【核心关键】必须运行在网页主世界，与官网 React 和 Cloudflare 脚本同处一室
-      func: () => {
-        try {
-          // 伪装页面可见性，防止后台标签页被 Cloudflare Turnstile 判定为挂机隐藏页
-          Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
-          Object.defineProperty(document, 'hidden', { get: () => false, configurable: true });
-          document.dispatchEvent(new Event('visibilitychange'));
-        } catch (e) {}
+    await runInPage(tempTabId, installCheckinResponseListener);
 
-        // 初始化一个全局变量，用来存放一会儿官网自己签到后收到的服务器结果
-        window.__gladosCheckinResult = null;
-
-        // 挂载原生 XMLHttpRequest 和 fetch 旁听器（官网 Axios 底层走 XMLHttpRequest，双保险旁听）
-        if (!window.__gladosHooked) {
-          window.__gladosHooked = true;
-
-          // 旁听 XMLHttpRequest
-          const rawOpen = XMLHttpRequest.prototype.open;
-          const rawSend = XMLHttpRequest.prototype.send;
-          XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-            this._requestUrl = url;
-            return rawOpen.call(this, method, url, ...rest);
-          };
-          XMLHttpRequest.prototype.send = function(...args) {
-            this.addEventListener('load', function() {
-              try {
-                // 当检测到官网自己的代码完成了 /user/checkin 请求时，把结果抄录下来
-                if (this._requestUrl && this._requestUrl.includes('/user/checkin') && !this._requestUrl.includes('/challenge')) {
-                  window.__gladosCheckinResult = JSON.parse(this.responseText);
-                }
-              } catch (e) {}
-            });
-            return rawSend.apply(this, args);
-          };
-
-          // 旁听原生 fetch（以防官网将来从 Axios 切换到 fetch）
-          const rawFetch = window.fetch;
-          window.fetch = async function(...args) {
-            const response = await rawFetch.apply(this, args);
-            try {
-              const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
-              if (reqUrl.includes('/user/checkin') && !reqUrl.includes('/challenge')) {
-                const clone = response.clone();
-                clone.json().then(data => {
-                  window.__gladosCheckinResult = data;
-                }).catch(() => {});
-              }
-            } catch (e) {}
-            return response;
-          };
-        }
-      }
-    });
-
-    // 4. 模拟真人在页面上自然停留 4.5 ~ 6.5 秒
-    // 这段时间极其重要：官网页面会自动请求 points、iqi、challenge，且稳稳凑够官方要求的 2.5 秒以上停留时间！
-    const humanWaitMs = Math.floor(Math.random() * 2000) + 4500;
-    console.log(`[${modeText}] 页面已就绪，正在模拟真人观察页面 ${(humanWaitMs / 1000).toFixed(1)} 秒...`);
-    await sleep(humanWaitMs);
-
-    // 5. 在网页主世界中寻找官方的签到按钮（button.ckb）并直接模拟真实鼠标点击！
-    const clickResult = await chrome.scripting.executeScript({
-      target: { tabId: tempTabId },
-      world: "MAIN",
-      func: async () => {
-        const sleepInPage = (ms) => new Promise(r => setTimeout(r, ms));
-
-        // 检查是否被重定向到了登录页
-        if (window.location.pathname.includes('login') || window.location.pathname.includes('authenticate')) {
-          return { notLoggedIn: true };
-        }
-
-        // 寻找官网签到按钮（官网源码中签到按钮的 class 固定为 "ckb"）
-        let checkinBtn = document.querySelector('button.ckb');
-        // 如果页面渲染稍微慢了一点，再最多等 3 秒找一下按钮
-        for (let w = 0; w < 6 && !checkinBtn; w++) {
-          await sleepInPage(500);
-          checkinBtn = document.querySelector('button.ckb');
-        }
-
-        if (!checkinBtn) {
-          return { buttonNotFound: true };
-        }
-
-        // 如果按钮上已经有 "is-done" 类名，或者处于 disabled 状态，说明今天已经签过到了
-        if (checkinBtn.classList.contains('is-done') || checkinBtn.disabled) {
-          return {
-            success: true,
-            data: { code: 1, message: "Checkin Repeats! Please Try Tomorrow (今日已签到)" }
-          };
-        }
-
-        // 触发完整的鼠标移动、按下、抬起和点击事件链（模拟 100% 真实的物理鼠标点击）
-        const mouseEvents = ['mouseover', 'mouseenter', 'mousedown', 'mouseup', 'click'];
-        mouseEvents.forEach(eventType => {
-          const evt = new MouseEvent(eventType, {
-            bubbles: true,
-            cancelable: true,
-            view: window
-          });
-          checkinBtn.dispatchEvent(evt);
-        });
-
-        // 点击按钮后，等待官网自己的代码把请求发出去并收到结果（最多轮询等待 8 秒）
-        for (let i = 0; i < 16; i++) {
-          await sleepInPage(500);
-          if (window.__gladosCheckinResult) {
-            return { success: true, data: window.__gladosCheckinResult };
-          }
-          // 如果按钮变成了 is-done 完成状态，也可以直接读取按钮上的文字作为保底结果
-          if (checkinBtn.classList.contains('is-done')) {
-            return {
-              success: true,
-              data: { code: 0, message: checkinBtn.innerText.trim() || "CheckIn! Get Points" }
-            };
-          }
-        }
-
-        return { success: false, error: "点击签到按钮后等待服务器响应超时" };
-      }
-    });
-
-    if (clickResult && clickResult[0] && clickResult[0].result) {
-      return clickResult[0].result;
+    let state = await waitForInitialState(tempTabId);
+    if (!state || state.tabClosed) {
+      return { success: false, error: "签到页加载失败或已关闭" };
     }
-    return null;
+    if (state.notLoggedIn) return { notLoggedIn: true };
+    if (state.alreadyDone) {
+      closeTabOnFinish = true;
+      return {
+        success: true,
+        data: { code: 1, message: state.label || "Checkin Repeats! Please Try Tomorrow (今日已签到)" }
+      };
+    }
 
+    if (CheckinGate.needsHumanVerification(state)) {
+      await sleep(3000);
+      const again = await readPageState(tempTabId);
+      if (again) state = again;
+    }
+
+    if (CheckinGate.needsHumanVerification(state)) {
+      const waited = await waitForUserVerification(tempTabId, modeText);
+      if (waited.exit) {
+        if (CheckinGate.isSuccessfulCheckin(waited.exit)) closeTabOnFinish = true;
+        return waited.exit;
+      }
+    }
+
+    let result = await clickWhenEnabled(tempTabId);
+    const afterClick = await readPageState(tempTabId);
+    if (CheckinGate.isVerificationFailure(result) || CheckinGate.needsHumanVerification(afterClick)) {
+      const waited = await waitForUserVerification(tempTabId, modeText);
+      if (waited.exit) {
+        if (CheckinGate.isSuccessfulCheckin(waited.exit)) closeTabOnFinish = true;
+        return waited.exit;
+      }
+      result = await clickWhenEnabled(tempTabId);
+    }
+
+    if (CheckinGate.isSuccessfulCheckin(result)) closeTabOnFinish = true;
+    return result;
   } catch (error) {
-    console.error(`[${modeText}] 网页原生点击签到执行出错:`, error);
+    console.error(`[${modeText}] 网页签到执行出错:`, error);
     return null;
   } finally {
-    // 6. 签到完成后，再稍微停留 1 秒确保数据入库，然后自动关闭临时标签页
-    await sleep(1000);
-    if (tempTabId !== null) {
+    if (closeTabOnFinish && tempTabId !== null) {
+      await sleep(1000);
       try {
         await chrome.tabs.remove(tempTabId);
-        console.log(`[${modeText}] 已自动清理并关闭临时签到标签页。`);
+        console.log(`[${modeText}] 签到完成，已关闭签到页。`);
       } catch (closeErr) {}
     }
   }
@@ -446,6 +618,8 @@ async function performFetch(today, notifyEnabled, isManual = false) {
   } catch (error) {
     console.error(`[${modeText}] 签到过程发生错误:`, error);
     await saveHistory(`[${isManual ? '手动' : '自动'}] 网络连接或解析失败`);
+  } finally {
+    chrome.runtime.sendMessage({ action: "checkInFinished" }).catch(() => {});
   }
 }
 

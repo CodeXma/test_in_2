@@ -217,30 +217,39 @@ document.getElementById('saveBtn').addEventListener('click', () => {
 });
 
 // ============================================================================
-// 手动测试按钮逻辑（带 12 秒动态倒计时反馈）
+// 手动测试按钮：等签到流程结束再刷新。人机验证可能需要你在签到页上点一下。
 // ============================================================================
+let testInProgress = false;
+let testUiSettled = false;
+let testUiTimer = null;
+
+function finishTestUi() {
+  if (!testInProgress || testUiSettled) return;
+  testUiSettled = true;
+  if (testUiTimer) {
+    clearTimeout(testUiTimer);
+    testUiTimer = null;
+  }
+  const testBtn = document.getElementById('testBtn');
+  testBtn.textContent = "✅ 操作完成，正在刷新页面...";
+  setTimeout(() => location.reload(), 400);
+}
+
+chrome.runtime.onMessage.addListener((request) => {
+  if (request.action === "checkInFinished") {
+    finishTestUi();
+  }
+});
+
 document.getElementById('testBtn').addEventListener('click', () => {
   const testBtn = document.getElementById('testBtn');
-  
-  // 1. 立即禁用按钮，防止重复点击
   testBtn.disabled = true;
+  testInProgress = true;
+  testUiSettled = false;
+  testBtn.textContent = "正在打开签到页… 如果出现「请验证您是真人」，请先点一下验证框";
 
-  // 2. 向后台脚本发送手动签到指令
-  chrome.runtime.sendMessage({ action: "forceCheckIn" }, () => {
-    // 后台会静默打开页面加载 + 模拟真人观察(4.5~6.5秒) + 点击官方按钮等待响应，设置 12 秒倒计时确保全流程跑完
-    let remainingSeconds = 12;
-    testBtn.textContent = `⏳ 正在模拟真人操作 (${remainingSeconds}s)...`;
-
-    const countdownTimer = setInterval(() => {
-      remainingSeconds--;
-      if (remainingSeconds > 0) {
-        testBtn.textContent = `⏳ 正在模拟真人操作 (${remainingSeconds}s)...`;
-      } else {
-        clearInterval(countdownTimer);
-        testBtn.textContent = "✅ 操作完成，正在刷新页面...";
-        // 倒计时结束，自动刷新当前设置页，查看最新的日历与日志
-        location.reload();
-      }
-    }, 1000);
-  });
+  chrome.runtime.sendMessage({ action: "forceCheckIn" });
+  testUiTimer = setTimeout(() => {
+    finishTestUi();
+  }, 120000);
 });
