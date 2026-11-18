@@ -1,6 +1,6 @@
 # GLaDOS 自动签到助手 (GLaDOS Checkin Helper)
 
-![Version](https://img.shields.io/badge/version-1.5.1-blue.svg)
+![Version](https://img.shields.io/badge/version-1.5.3-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Chrome-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/bebkcollfclnaamapnjcaggfkgdfkail.svg)](https://chromewebstore.google.com/detail/bebkcollfclnaamapnjcaggfkgdfkail)
@@ -19,7 +19,12 @@
 - **未登录状态检测**：当浏览器未登录官网或 Cookie 过期时，在设置页日历面板与桌面通知中提供清晰的登录引导提示。
 - **本地历史记录**：本地保存最近 30 条签到执行日志，手动或自动状态一目了然。
 - **通知提醒**：支持可选的系统级别桌面通知，即时反馈签到结果与获得点数。
+- **Bark 推送**：在设置页填写 Bark 地址后，每天的签到结果会推送到手机。
 - **隐私安全**：纯本地运行，不收集任何用户账号数据。
+
+## 🆕 v1.5.3 更新日志
+
+- 设置页可以填写 Bark 地址。每天签到结束后，成功、失败和未登录都会推送当天结果。地址留空则不推送。
 
 ## 🆕 v1.5.1 更新日志
 
@@ -52,6 +57,7 @@
 
 - `manifest.json`: 插件配置文件 (Manifest V3)。
 - `background.js`: 后台常驻脚本，负责定时闹钟、随机调度和网页原生点击签到逻辑。
+- `bark.js`: 解析设置页里的 Bark 地址。
 - `options.html/js`: 插件设置界面、服务器 30 天签到日历及本地历史记录展示。
 - `PRIVACY_POLICY.md`: 隐私政策说明。
 - `icon.png`: 程序图标文件。

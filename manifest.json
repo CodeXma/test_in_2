@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GLaDOS 自动签到助手",
-  "version": "1.5.1",
+  "version": "1.5.3",
   "description": "每天自动完成 GLaDOS 签到。确保您在当前浏览器中已登录 https://glados.cloud/console/checkin （确保域名正确，否则会签到失败。）",
   "permissions": [
     "alarms",
@@ -12,6 +12,10 @@
   ],
   "host_permissions": [
     "https://glados.cloud/*"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
   ],
   "action": {
     "default_title": "GLaDOS 签到助手"
