@@ -69,6 +69,22 @@
       border-color: #ced4da; 
       cursor: not-allowed; 
     }
+    #barkUrl {
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 6px;
+      padding: 8px 10px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    .bark-hint {
+      margin: 6px 0 8px;
+      font-size: 13px;
+      color: #333;
+    }
+    #barkTestBtn { color: #007bff; font-weight: 500; }
 
     /* ==========================================
        服务器状态与 30 天签到日历面板样式
@@ -189,7 +205,7 @@
 </head>
 <body>
   <div class="card">
-    <h3>GLaDOS 自动签到设置 (v1.5.1)</h3>
+    <h3>GLaDOS 自动签到设置 (v1.5.3)</h3>
     
     <div>
       <label for="targetHour">⏰ 设定签到时间： </label>
@@ -240,6 +256,13 @@
       </label>
     </div>
 
+    <div style="margin: 15px 0;">
+      <label for="barkUrl">Bark 推送地址</label>
+      <input id="barkUrl" type="text" placeholder="https://api.day.app/你的Key" autocomplete="off" spellcheck="false">
+      <p class="bark-hint">留空则不推送。填写 Bark App 里复制的地址后，每天签到结束会把当天结果发过去。自建服务器也可以，例如 https://你的服务器/你的Key。</p>
+      <button type="button" id="barkTestBtn">测试 Bark 推送</button>
+    </div>
+
     <button id="saveBtn">保存设置</button>
     <button id="testBtn">手动测试签到</button>
 
@@ -271,6 +294,7 @@
       <ul id="historyList"></ul>
     </div>
   </div>
+  <script src="bark.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

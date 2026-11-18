@@ -10,12 +10,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const data = await chrome.storage.local.get({
       targetHour: 9,
       notifyEnabled: true,
+      barkUrl: "",
       history: []
     });
 
     // 恢复下拉框和复选框的选中状态
     document.getElementById('targetHour').value = data.targetHour;
     document.getElementById('notifyToggle').checked = data.notifyEnabled;
+    document.getElementById('barkUrl').value = data.barkUrl;
 
     // 2. 渲染本地最近 30 次签到历史日志
     renderLocalHistory(data.history);
@@ -202,19 +204,67 @@ async function loadServerCalendarData() {
 // ============================================================================
 // 保存设置按钮逻辑
 // ============================================================================
-document.getElementById('saveBtn').addEventListener('click', () => {
+document.getElementById('saveBtn').addEventListener('click', async () => {
   const hour = parseInt(document.getElementById('targetHour').value, 10);
   const notify = document.getElementById('notifyToggle').checked;
+  const barkUrl = document.getElementById('barkUrl').value.trim();
+  const allowed = await allowBarkAddress(barkUrl);
+  if (!allowed) return;
 
   chrome.storage.local.set({
     targetHour: hour,
-    notifyEnabled: notify
+    notifyEnabled: notify,
+    barkUrl
   }, () => {
-    // 通知后台脚本重新根据新设定的小时安排闹钟
     chrome.runtime.sendMessage({ action: "rescheduleAlarm" });
-    alert(`设置已保存！插件将每天在 ${hour}:00 后的随机时间尝试签到。`);
+    const barkNote = barkUrl ? "签到结果会推送到 Bark。" : "";
+    alert(`设置已保存！插件将每天在 ${hour}:00 后的随机时间尝试签到。${barkNote}`);
   });
 });
+
+document.getElementById('barkTestBtn').addEventListener('click', async () => {
+  const barkUrl = document.getElementById('barkUrl').value.trim();
+  const allowed = await allowBarkAddress(barkUrl, true);
+  if (!allowed) return;
+
+  await chrome.storage.local.set({ barkUrl });
+  chrome.runtime.sendMessage({ action: "testBark" }, (response) => {
+    if (response && response.ok) {
+      alert("测试推送已发送，请查看 Bark。");
+      return;
+    }
+    alert((response && response.error) || "推送失败，请检查地址和网络。");
+  });
+});
+
+async function allowBarkAddress(barkUrl, required) {
+  const parsed = parseBarkAddress(barkUrl);
+  if (!parsed) {
+    if (barkUrl || required) {
+      alert("Bark 地址格式不对。请填写 App 里复制的地址，例如 https://api.day.app/你的Key");
+      return false;
+    }
+    const previous = await chrome.storage.local.get({ barkUrl: "" });
+    const oldParsed = parseBarkAddress(previous.barkUrl);
+    if (oldParsed) chrome.permissions.remove({ origins: [oldParsed.originPattern] });
+    return true;
+  }
+
+  const granted = await new Promise((resolve) => {
+    chrome.permissions.request({ origins: [parsed.originPattern] }, resolve);
+  });
+  if (!granted) {
+    alert("没有允许访问这个 Bark 地址，无法推送。");
+    return false;
+  }
+
+  const previous = await chrome.storage.local.get({ barkUrl: "" });
+  const oldParsed = parseBarkAddress(previous.barkUrl);
+  if (oldParsed && oldParsed.originPattern !== parsed.originPattern) {
+    chrome.permissions.remove({ origins: [oldParsed.originPattern] });
+  }
+  return true;
+}
 
 // ============================================================================
 // 手动测试按钮逻辑（带 12 秒动态倒计时反馈）

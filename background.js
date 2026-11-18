@@ -3,6 +3,8 @@
 // 作用：插件的后台常驻服务脚本（Service Worker），负责定时闹钟、随机时间调度和原生网页点击签到
 // ============================================================================
 
+importScripts("bark.js");
+
 // 【辅助工具 1】延时等待函数（模拟人类停顿思考）
 // 参数 ms：需要等待的毫秒数（1000 毫秒 = 1 秒）
 function sleep(ms) {
@@ -474,14 +476,11 @@ async function performFetch(today, notifyEnabled, isManual = false) {
 
       const failMsg = (pageResult && pageResult.error) ? pageResult.error : "页面加载超时或未找到签到按钮，请稍后重试";
       await saveHistory(`[${isManual ? '手动' : '自动'}] ⚠️ ${failMsg}`);
-      if (notifyEnabled !== false) {
-        chrome.notifications.create({
-          type: "basic",
-          iconUrl: "icon.png",
-          title: isManual ? "GLaDOS 手动测试异常" : "GLaDOS 自动签到异常",
-          message: failMsg
-        });
-      }
+      await reportCheckin(
+        isManual ? "GLaDOS 手动测试异常" : "GLaDOS 自动签到异常",
+        failMsg,
+        notifyEnabled
+      );
       return;
     }
 
@@ -523,19 +522,21 @@ async function performFetch(today, notifyEnabled, isManual = false) {
       console.log("[状态更新] 本次为手动测试，不修改自动签到日期标识。");
     }
 
-    // 弹出系统桌面通知
-    if (notifyEnabled !== false) {
-      chrome.notifications.create({
-        type: "basic",
-        iconUrl: "icon.png",
-        title: isManual ? "GLaDOS 手动测试结果" : "GLaDOS 自动签到结果",
-        message: statusMsg
-      });
-    }
+    await reportCheckin(
+      isManual ? "GLaDOS 手动测试结果" : "GLaDOS 自动签到结果",
+      statusMsg,
+      notifyEnabled
+    );
 
   } catch (error) {
     console.error(`[${modeText}] 签到过程发生错误:`, error);
-    await saveHistory(`[${isManual ? '手动' : '自动'}] 网络连接或解析失败`);
+    const failMsg = "网络连接或解析失败";
+    await saveHistory(`[${isManual ? '手动' : '自动'}] ${failMsg}`);
+    await reportCheckin(
+      isManual ? "GLaDOS 手动测试异常" : "GLaDOS 自动签到异常",
+      failMsg,
+      notifyEnabled
+    );
   }
 }
 
@@ -545,13 +546,54 @@ async function handleNotLoggedIn(modeText, notifyEnabled, isManual) {
   console.warn(`[${modeText}] ${notLoginMsg}`);
   await saveHistory(`[${isManual ? '手动' : '自动'}] ⚠️ ` + notLoginMsg);
 
+  await reportCheckin("GLaDOS 签到失败 (未登录)", notLoginMsg, notifyEnabled);
+}
+
+function reportCheckin(title, message, notifyEnabled) {
   if (notifyEnabled !== false) {
     chrome.notifications.create({
       type: "basic",
       iconUrl: "icon.png",
-      title: "GLaDOS 签到失败 (未登录)",
-      message: notLoginMsg
+      title,
+      message
     });
+  }
+  return pushBark(title, message);
+}
+
+async function pushBark(title, body) {
+  try {
+    const { barkUrl } = await chrome.storage.local.get({ barkUrl: "" });
+    const target = parseBarkAddress(barkUrl);
+    if (!target) return { ok: false, skipped: true };
+
+    const granted = await chrome.permissions.contains({ origins: [target.originPattern] });
+    if (!granted) {
+      console.warn("[Bark] 尚未允许访问该地址，跳过推送。");
+      return { ok: false, error: "尚未允许访问这个 Bark 地址，请在设置页重新保存。" };
+    }
+
+    const response = await fetch(target.pushUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({
+        device_key: target.deviceKey,
+        title,
+        body,
+        group: "GLaDOS"
+      })
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || !data || data.code !== 200) {
+      const error = (data && (data.message || data.msg)) || `Bark 返回 ${response.status}`;
+      console.warn("[Bark] 推送失败:", error);
+      return { ok: false, error };
+    }
+    console.log("[Bark] 已推送签到结果。");
+    return { ok: true };
+  } catch (error) {
+    console.warn("[Bark] 推送失败:", error);
+    return { ok: false, error: "无法连接到 Bark 服务器。" };
   }
 }
 
@@ -592,6 +634,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       tryCheckIn();
     });
     sendResponse({ status: "rescheduled" });
+  }
+  else if (request.action === "testBark") {
+    pushBark("GLaDOS 签到", "Bark 推送测试。之后每天的签到结果会发到这个地址。").then(sendResponse);
   }
   return true;
 });
