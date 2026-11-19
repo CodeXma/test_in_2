@@ -267,7 +267,7 @@ async function allowBarkAddress(barkUrl, required) {
 }
 
 // ============================================================================
-// 手动测试按钮逻辑（带 12 秒动态倒计时反馈）
+// 手动测试按钮逻辑（带动态倒计时反馈）
 // ============================================================================
 document.getElementById('testBtn').addEventListener('click', () => {
   const testBtn = document.getElementById('testBtn');
@@ -277,8 +277,8 @@ document.getElementById('testBtn').addEventListener('click', () => {
 
   // 2. 向后台脚本发送手动签到指令
   chrome.runtime.sendMessage({ action: "forceCheckIn" }, () => {
-    // 后台会静默打开页面加载 + 模拟真人观察(4.5~6.5秒) + 点击官方按钮等待响应，设置 12 秒倒计时确保全流程跑完
-    let remainingSeconds = 12;
+    // 后台会打开签到页、等待验证并点击签到。倒计时覆盖整段流程，结束后再刷新结果。
+    let remainingSeconds = 40;
     testBtn.textContent = `⏳ 正在模拟真人操作 (${remainingSeconds}s)...`;
 
     const countdownTimer = setInterval(() => {
