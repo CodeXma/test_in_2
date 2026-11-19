@@ -1,6 +1,6 @@
 # GLaDOS 自动签到助手 (GLaDOS Checkin Helper)
 
-![Version](https://img.shields.io/badge/version-1.5.3-blue.svg)
+![Version](https://img.shields.io/badge/version-1.5.4-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Chrome-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/bebkcollfclnaamapnjcaggfkgdfkail.svg)](https://chromewebstore.google.com/detail/bebkcollfclnaamapnjcaggfkgdfkail)
@@ -21,6 +21,11 @@
 - **通知提醒**：支持可选的系统级别桌面通知，即时反馈签到结果与获得点数。
 - **Bark 推送**：在设置页填写 Bark 地址后，每天的签到结果会推送到手机。
 - **隐私安全**：纯本地运行，不收集任何用户账号数据。
+
+## 🆕 v1.5.4 更新日志
+
+- 签到按钮改为在页面内点击。后台标签页里用坐标点击经常点不中，请求发不出去，就会一直等到「等待服务器响应超时」。
+- 如果页面没有把结果传回来，会再用当天的积分记录确认是不是已经签上。
 
 ## 🆕 v1.5.3 更新日志
 
@@ -56,7 +61,7 @@
 2. 左键点击图标（或右键选择 **“选项” (Options)**）打开设置页面。
 3. 在设置页面设定您期望的 **每天签到时间（0-23点）**。
 4. 确保您在当前浏览器中已登录 `https://glados.cloud/console/checkin`。
-5. 您可以点击“手动测试签到”按钮（等待 12 秒倒计时完成）来验证配置是否正确。
+5. 您可以点击“手动测试签到”按钮（等待倒计时完成）来验证配置是否正确。
 
 ## 📂 文件结构
 

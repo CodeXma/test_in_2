@@ -211,8 +211,27 @@ function readCheckinPage() {
       y: Math.round(rect.top + rect.height / 2),
       text: (button.innerText || "").trim()
     },
+    started: window.__gladosCheckinStarted || 0,
     result: window.__gladosCheckinResult || null
   };
+}
+
+function clickCheckinButton() {
+  const button = document.querySelector("button.ckb");
+  if (!button) return { buttonNotFound: true };
+  if (button.classList.contains("is-done")) {
+    return { done: true, text: (button.innerText || "").trim() };
+  }
+  if (button.disabled) return { disabled: true };
+  ["mouseover", "mouseenter", "mousedown", "mouseup", "click"].forEach((eventType) => {
+    button.dispatchEvent(new MouseEvent(eventType, {
+      bubbles: true,
+      cancelable: true,
+      view: window
+    }));
+  });
+  button.click();
+  return { clicked: true };
 }
 
 async function readPage(tabId) {
@@ -222,6 +241,34 @@ async function readPage(tabId) {
     func: readCheckinPage
   });
   return injected && injected.result;
+}
+
+async function todayCheckinFromPoints() {
+  try {
+    const response = await fetch("https://glados.cloud/api/user/points", {
+      method: "GET",
+      credentials: "include"
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (!data || data.code !== 0) return null;
+    const now = new Date();
+    const todayKey = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+    for (const item of data.history || []) {
+      if (!item.business || String(item.business).indexOf("checkin") === -1) continue;
+      const recordDate = new Date(Number(item.time));
+      const dateKey = `${recordDate.getFullYear()}-${recordDate.getMonth() + 1}-${recordDate.getDate()}`;
+      if (dateKey !== todayKey) continue;
+      const points = parseInt(item.change, 10);
+      const message = !isNaN(points) && points > 0
+        ? `Checkin! Get Points (本次获得: +${points} 点)`
+        : "Checkin! Get Points";
+      return { code: 0, message };
+    }
+  } catch (error) {
+    console.warn("[Checkin] 无法用积分记录确认今天是否已签到:", error);
+  }
+  return null;
 }
 
 async function trustedClick(tabId, point) {
@@ -312,31 +359,43 @@ async function executeInRealWebPage(modeText) {
             this._requestUrl = url;
             return rawOpen.call(this, method, url, ...rest);
           };
+          function isCheckinUrl(url) {
+            const target = String(url || "");
+            return target.includes("/user/checkin") && !target.includes("/challenge");
+          }
+          function noteCheckin(url) {
+            if (!isCheckinUrl(url)) return false;
+            window.__gladosCheckinStarted = (window.__gladosCheckinStarted || 0) + 1;
+            return true;
+          }
           XMLHttpRequest.prototype.send = function(...args) {
-            this.addEventListener('load', function() {
-              try {
-                // 当检测到官网自己的代码完成了 /user/checkin 请求时，把结果抄录下来
-                if (this._requestUrl && this._requestUrl.includes('/user/checkin') && !this._requestUrl.includes('/challenge')) {
+            if (noteCheckin(this._requestUrl)) {
+              this.addEventListener("load", function() {
+                try {
                   window.__gladosCheckinResult = JSON.parse(this.responseText);
-                }
-              } catch (e) {}
-            });
+                } catch (e) {}
+              });
+              this.addEventListener("error", function() {
+                window.__gladosCheckinResult = { code: -1, message: "签到请求没有得到服务器响应" };
+              });
+            }
             return rawSend.apply(this, args);
           };
 
           // 旁听原生 fetch（以防官网将来从 Axios 切换到 fetch）
           const rawFetch = window.fetch;
           window.fetch = async function(...args) {
+            const reqUrl = typeof args[0] === "string" ? args[0] : (args[0] && args[0].url) || "";
+            const matched = noteCheckin(reqUrl);
             const response = await rawFetch.apply(this, args);
-            try {
-              const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
-              if (reqUrl.includes('/user/checkin') && !reqUrl.includes('/challenge')) {
+            if (matched) {
+              try {
                 const clone = response.clone();
                 clone.json().then(data => {
                   window.__gladosCheckinResult = data;
                 }).catch(() => {});
-              }
-            } catch (e) {}
+              } catch (e) {}
+            }
             return response;
           };
         }
@@ -365,11 +424,15 @@ async function executeInRealWebPage(modeText) {
       };
     }
 
+    let buttonStayedDisabled = false;
     for (let attempt = 1; attempt <= 2; attempt++) {
       await chrome.scripting.executeScript({
         target: { tabId: tempTabId },
         world: "MAIN",
-        func: () => { window.__gladosCheckinResult = null; }
+        func: () => {
+          window.__gladosCheckinResult = null;
+          window.__gladosCheckinStarted = 0;
+        }
       });
       page = await readPage(tempTabId);
       if (page && page.turnstile) {
@@ -381,33 +444,56 @@ async function executeInRealWebPage(modeText) {
         }
         await sleep(2500);
       }
-      page = await readPage(tempTabId);
-      if (!page || !page.button) return { buttonNotFound: true };
-      if (page.button.done) {
-        return {
-          success: true,
-          data: { code: 1, message: page.button.text || "Checkin Repeats! Please Try Tomorrow" }
-        };
+
+      let ready = false;
+      for (let waitButton = 0; waitButton < 16; waitButton++) {
+        page = await readPage(tempTabId);
+        if (!page || !page.button) return { buttonNotFound: true };
+        if (page.button.done) {
+          return {
+            success: true,
+            data: { code: 1, message: page.button.text || "Checkin Repeats! Please Try Tomorrow" }
+          };
+        }
+        if (!page.button.disabled) {
+          ready = true;
+          break;
+        }
+        await sleep(500);
       }
-      if (page.button.disabled) {
+      if (!ready) {
+        buttonStayedDisabled = true;
         console.log(`[${modeText}] 签到按钮还不可用，等待验证完成。`);
-        await sleep(2000);
         continue;
       }
+
       console.log(`[${modeText}] 正在点击签到按钮。`);
-      try {
-        await trustedClick(tempTabId, page.button);
-      } catch (error) {
-        console.error(`[${modeText}] 点击签到按钮失败:`, error);
-        return { success: false, error: "无法点击签到按钮，请在打开的页面手动完成。" };
+      const [clickInjected] = await chrome.scripting.executeScript({
+        target: { tabId: tempTabId },
+        world: "MAIN",
+        func: clickCheckinButton
+      });
+      const clickState = clickInjected && clickInjected.result;
+      if (!clickState || clickState.buttonNotFound) return { buttonNotFound: true };
+      if (clickState.done) {
+        return {
+          success: true,
+          data: { code: 1, message: clickState.text || "Checkin Repeats! Please Try Tomorrow" }
+        };
+      }
+      if (clickState.disabled) {
+        buttonStayedDisabled = true;
+        continue;
       }
 
-      for (let i = 0; i < 20; i++) {
+      let retriedClick = false;
+      for (let i = 0; i < 30; i++) {
         await sleep(500);
         const current = await readPage(tempTabId);
         if (current && current.result) {
           const message = String(current.result.message || "").toLowerCase();
-          if (message.includes("cloudflare") && attempt === 1) break;
+          const retryable = message.includes("cloudflare") || current.result.code === -1;
+          if (retryable && attempt === 1) break;
           return { success: true, data: current.result };
         }
         if (current && current.button && current.button.done) {
@@ -416,9 +502,23 @@ async function executeInRealWebPage(modeText) {
             data: { code: 0, message: current.button.text || "CheckIn! Get Points" }
           };
         }
+        if (!retriedClick && current && !current.started && i === 3) {
+          retriedClick = true;
+          console.log(`[${modeText}] 签到请求还没发出，再点一次签到按钮。`);
+          await chrome.scripting.executeScript({
+            target: { tabId: tempTabId },
+            world: "MAIN",
+            func: clickCheckinButton
+          });
+        }
       }
     }
 
+    const recorded = await todayCheckinFromPoints();
+    if (recorded) return { success: true, data: recorded };
+    if (buttonStayedDisabled) {
+      return { success: false, error: "签到按钮一直不可用，真人验证没有完成" };
+    }
     return { success: false, error: "点击签到按钮后等待服务器响应超时" };
 
   } catch (error) {
