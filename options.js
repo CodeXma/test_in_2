@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       targetHour: 9,
       notifyEnabled: true,
       barkUrl: "",
+      serverChanKey: "",
       history: []
     });
 
@@ -18,6 +19,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('targetHour').value = data.targetHour;
     document.getElementById('notifyToggle').checked = data.notifyEnabled;
     document.getElementById('barkUrl').value = data.barkUrl;
+    document.getElementById('serverChanKey').value = data.serverChanKey;
 
     // 2. 渲染本地最近 30 次签到历史日志
     renderLocalHistory(data.history);
@@ -208,17 +210,24 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
   const hour = parseInt(document.getElementById('targetHour').value, 10);
   const notify = document.getElementById('notifyToggle').checked;
   const barkUrl = document.getElementById('barkUrl').value.trim();
-  const allowed = await allowBarkAddress(barkUrl);
-  if (!allowed) return;
+  const serverChanKey = document.getElementById('serverChanKey').value.trim();
+  const barkAllowed = await allowBarkAddress(barkUrl);
+  if (!barkAllowed) return;
+  const serverChanAllowed = await allowServerChan(serverChanKey);
+  if (!serverChanAllowed) return;
 
   chrome.storage.local.set({
     targetHour: hour,
     notifyEnabled: notify,
-    barkUrl
+    barkUrl,
+    serverChanKey
   }, () => {
     chrome.runtime.sendMessage({ action: "rescheduleAlarm" });
-    const barkNote = barkUrl ? "签到结果会推送到 Bark。" : "";
-    alert(`设置已保存！插件将每天在 ${hour}:00 后的随机时间尝试签到。${barkNote}`);
+    const notes = [];
+    if (barkUrl) notes.push("Bark");
+    if (serverChanKey) notes.push("Server酱");
+    const pushNote = notes.length ? `签到结果会推送到${notes.join("和")}。` : "";
+    alert(`设置已保存！插件将每天在 ${hour}:00 后的随机时间尝试签到。${pushNote}`);
   });
 });
 
@@ -260,6 +269,50 @@ async function allowBarkAddress(barkUrl, required) {
 
   const previous = await chrome.storage.local.get({ barkUrl: "" });
   const oldParsed = parseBarkAddress(previous.barkUrl);
+  if (oldParsed && oldParsed.originPattern !== parsed.originPattern) {
+    chrome.permissions.remove({ origins: [oldParsed.originPattern] });
+  }
+  return true;
+}
+
+document.getElementById('serverChanTestBtn').addEventListener('click', async () => {
+  const serverChanKey = document.getElementById('serverChanKey').value.trim();
+  const allowed = await allowServerChan(serverChanKey, true);
+  if (!allowed) return;
+
+  await chrome.storage.local.set({ serverChanKey });
+  chrome.runtime.sendMessage({ action: "testServerChan" }, (response) => {
+    if (response && response.ok) {
+      alert("测试推送已发送，请查看 Server酱。");
+      return;
+    }
+    alert((response && response.error) || "推送失败，请检查 SendKey 和网络。");
+  });
+});
+
+async function allowServerChan(serverChanKey, required) {
+  const parsed = parseServerChanTarget(serverChanKey);
+  if (!parsed) {
+    if (serverChanKey || required) {
+      alert("Server酱格式不对。请填写 SCT 开头的 SendKey，或粘贴完整的 .send 地址。");
+      return false;
+    }
+    const previous = await chrome.storage.local.get({ serverChanKey: "" });
+    const oldParsed = parseServerChanTarget(previous.serverChanKey);
+    if (oldParsed) chrome.permissions.remove({ origins: [oldParsed.originPattern] });
+    return true;
+  }
+
+  const granted = await new Promise((resolve) => {
+    chrome.permissions.request({ origins: [parsed.originPattern] }, resolve);
+  });
+  if (!granted) {
+    alert("没有允许访问这个 Server酱 地址，无法推送。");
+    return false;
+  }
+
+  const previous = await chrome.storage.local.get({ serverChanKey: "" });
+  const oldParsed = parseServerChanTarget(previous.serverChanKey);
   if (oldParsed && oldParsed.originPattern !== parsed.originPattern) {
     chrome.permissions.remove({ origins: [oldParsed.originPattern] });
   }
