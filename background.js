@@ -3,7 +3,7 @@
 // 作用：插件的后台常驻服务脚本（Service Worker），负责定时闹钟、随机时间调度和原生网页点击签到
 // ============================================================================
 
-importScripts("bark.js");
+importScripts("bark.js", "serverchan.js");
 
 // 【辅助工具 1】延时等待函数（模拟人类停顿思考）
 // 参数 ms：需要等待的毫秒数（1000 毫秒 = 1 秒）
@@ -658,7 +658,44 @@ function reportCheckin(title, message, notifyEnabled) {
       message
     });
   }
-  return pushBark(title, message);
+  return Promise.all([
+    pushBark(title, message),
+    pushServerChan(title, message)
+  ]);
+}
+
+async function pushServerChan(title, body) {
+  try {
+    const { serverChanKey } = await chrome.storage.local.get({ serverChanKey: "" });
+    const target = parseServerChanTarget(serverChanKey);
+    if (!target) return { ok: false, skipped: true };
+
+    const granted = await chrome.permissions.contains({ origins: [target.originPattern] });
+    if (!granted) {
+      console.warn("[Server酱] 尚未允许访问该地址，跳过推送。");
+      return { ok: false, error: "尚未允许访问这个 Server酱 地址，请在设置页重新保存。" };
+    }
+
+    const payload = new URLSearchParams();
+    payload.set("title", title);
+    payload.set("desp", String(body || "").replace(/\n/g, "\n\n"));
+    const response = await fetch(target.pushUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=utf-8" },
+      body: payload.toString()
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || !data || Number(data.code) !== 0) {
+      const error = (data && (data.message || data.msg)) || `Server酱 返回 ${response.status}`;
+      console.warn("[Server酱] 推送失败:", error);
+      return { ok: false, error };
+    }
+    console.log("[Server酱] 已推送签到结果。");
+    return { ok: true };
+  } catch (error) {
+    console.warn("[Server酱] 推送失败:", error);
+    return { ok: false, error: "无法连接到 Server酱。" };
+  }
 }
 
 async function pushBark(title, body) {
@@ -737,6 +774,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   else if (request.action === "testBark") {
     pushBark("GLaDOS 签到", "Bark 推送测试。之后每天的签到结果会发到这个地址。").then(sendResponse);
+  }
+  else if (request.action === "testServerChan") {
+    pushServerChan("GLaDOS 签到", "Server酱推送测试。之后每天的签到结果会发到这里。").then(sendResponse);
   }
   return true;
 });
